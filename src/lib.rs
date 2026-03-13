@@ -5,26 +5,10 @@ struct ObsidianExtension;
 
 impl ObsidianExtension {
     fn is_obsidian_vault(worktree: &Worktree) -> bool {
-        worktree
-            .read_text_file(".obsidian/app.json")
-            .or_else(|_| worktree.read_text_file(".obsidian/workspace.json"))
-            .is_ok()
-    }
-
-    fn find_node(worktree: &Worktree) -> Option<String> {
-        let path_env = worktree
-            .shell_env()
-            .into_iter()
-            .find(|(k, _)| k == "PATH")
-            .map(|(_, v)| v)?;
-
-        for dir in path_env.split(':') {
-            let candidate = format!("{}/node", dir);
-            if std::fs::metadata(&candidate).is_ok() {
-                return Some(candidate);
-            }
-        }
-        None
+        // Buscamos si existe la carpeta de configuración de Obsidian
+        worktree.read_text_file(".obsidian/app.json").is_ok()
+            || worktree.read_text_file(".obsidian/workspace.json").is_ok()
+            || worktree.read_text_file(".obsidian/workspace").is_ok()
     }
 }
 
@@ -38,17 +22,15 @@ impl zed::Extension for ObsidianExtension {
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
     ) -> Result<zed::Command> {
-        let node = Self::find_node(worktree)
-            .ok_or_else(|| "No se encontró 'node' en el PATH. Instala Node.js 18+.".to_string())?;
+        // 1. Usar la API nativa de Zed para obtener Node
+        let node = zed::node_binary_path()
+            .map_err(|e| format!("Error al obtener Node: {}", e))?;
 
-        let ext_dir = worktree
-            .shell_env()
-            .into_iter()
-            .find(|(k, _)| k == "ZED_EXTENSION_DIR")
-            .map(|(_, v)| v)
-            .unwrap_or_else(|| ".".to_string());
-
-        let server_script = format!("{}/language-server/dist/index.js", ext_dir);
+        // 2. En el entorno WASM de Zed, el current_dir() es la raíz de la extensión instalada
+        let ext_dir = std::env::current_dir()
+            .map_err(|e| format!("Error al leer directorio de la extensión: {}", e))?;
+        
+        let server_script = ext_dir.join("language-server/dist/index.js");
         let is_vault = Self::is_obsidian_vault(worktree);
 
         zed::set_language_server_installation_status(
@@ -59,11 +41,11 @@ impl zed::Extension for ObsidianExtension {
         Ok(zed::Command {
             command: node,
             args: vec![
-                server_script,
+                server_script.to_string_lossy().to_string(),
                 "--stdio".to_string(),
                 if is_vault { "--obsidian".to_string() } else { "--no-obsidian".to_string() },
             ],
-            env: Default::default(),
+            env: vec![],
         })
     }
 

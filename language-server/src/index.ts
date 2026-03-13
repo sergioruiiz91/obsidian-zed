@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { exec } from "child_process";
 import {
   createConnection,
   TextDocuments,
@@ -416,8 +417,9 @@ connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
       }
       try {
         const outPath = generateGraphFile(vaultRoot);
+        exec(`xdg-open "${outPath}" 2>/dev/null || open "${outPath}" 2>/dev/null || start "" "${outPath}"`);
         connection.window.showInformationMessage(
-          `✅ Grafo generado → ${outPath}  (ábrelo en el navegador)`
+          `✅ Grafo generado y abierto en el navegador`
         );
       } catch (err) {
         connection.window.showErrorMessage(`Error generando grafo: ${err instanceof Error ? err.message : String(err)}`);
