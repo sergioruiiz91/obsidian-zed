@@ -226,7 +226,3 @@ tags:
 4. PR con descripción clara
 
 ---
-
-## 📄 Licencia
-
-MIT © 2024 Tu Nombre
