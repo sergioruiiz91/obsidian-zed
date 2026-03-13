@@ -1,0 +1,5 @@
+target/
+language-server/node_modules/
+language-server/dist/
+*.wasm
+.DS_Store

@@ -1,0 +1,11 @@
+id = "obsidian-vault"
+name = "Obsidian Vault"
+version = "0.2.0"
+schema_version = 1
+description = "Detecta vaults de Obsidian, ofrece snippets, autocompletado de tags y visualización del grafo de notas."
+authors = ["Tu Nombre <tu@email.com>"]
+repository = "https://github.com/tuusuario/obsidian-zed"
+
+[language_servers.obsidian-lsp]
+name = "Obsidian LSP"
+language = "Markdown"

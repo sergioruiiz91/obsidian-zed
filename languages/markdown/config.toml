@@ -1,0 +1,8 @@
+name = "Markdown"
+scope = "text.markdown"
+injection-regex = "md|markdown"
+file-types = ["md", "markdown", "mdx"]
+
+[indent]
+tab-width = 2
+unit = "  "
