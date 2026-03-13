@@ -1,9 +1,43 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-echo "🛠️ Aplicando parches a la extensión..."
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 1. Reescribir src/lib.rs
-cat <<'EOF' >src/lib.rs
+echo "========================================"
+echo " 🛠️  PARCHEANDO Y COMPILANDO EXTENSIÓN  "
+echo "========================================"
+
+echo "▶ 1/6 Regenerando archivos de configuración base..."
+# Recreamos extension.toml por si se había borrado
+cat << 'INNER_EOF' > "$ROOT/extension.toml"
+id = "obsidian-vault"
+name = "Obsidian Vault"
+version = "0.2.0"
+schema_version = 1
+description = "Detecta vaults de Obsidian, ofrece snippets, autocompletado de tags y visualización del grafo de notas."
+authors = ["Tu Nombre <tu@email.com>"]
+repository = "https://github.com/tuusuario/obsidian-zed"
+
+[language_servers.obsidian-lsp]
+name = "Obsidian LSP"
+language = "Markdown"
+INNER_EOF
+
+# Recreamos la configuración de Markdown
+mkdir -p "$ROOT/languages/markdown"
+cat << 'INNER_EOF' > "$ROOT/languages/markdown/config.toml"
+name = "Markdown"
+scope = "text.markdown"
+injection-regex = "md|markdown"
+file-types = ["md", "markdown", "mdx"]
+
+[indent]
+tab-width = 2
+unit = "  "
+INNER_EOF
+
+echo "▶ 2/6 Parcheando src/lib.rs..."
+cat << 'INNER_EOF' > "$ROOT/src/lib.rs"
 use serde_json::json;
 use zed_extension_api::{self as zed, LanguageServerId, Result, Worktree};
 
@@ -11,7 +45,6 @@ struct ObsidianExtension;
 
 impl ObsidianExtension {
     fn is_obsidian_vault(worktree: &Worktree) -> bool {
-        // Buscamos si existe la carpeta de configuración de Obsidian
         worktree.read_text_file(".obsidian/app.json").is_ok()
             || worktree.read_text_file(".obsidian/workspace.json").is_ok()
             || worktree.read_text_file(".obsidian/workspace").is_ok()
@@ -28,11 +61,9 @@ impl zed::Extension for ObsidianExtension {
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
     ) -> Result<zed::Command> {
-        // 1. Usar la API nativa de Zed para obtener Node
         let node = zed::node_binary_path()
             .map_err(|e| format!("Error al obtener Node: {}", e))?;
 
-        // 2. En el entorno WASM de Zed, el current_dir() es la raíz de la extensión instalada
         let ext_dir = std::env::current_dir()
             .map_err(|e| format!("Error al leer directorio de la extensión: {}", e))?;
         
@@ -71,75 +102,64 @@ impl zed::Extension for ObsidianExtension {
 }
 
 zed::register_extension!(ObsidianExtension);
-EOF
-echo "✅ src/lib.rs actualizado."
+INNER_EOF
 
-# 2. Reescribir build.sh
-cat <<'EOF' >build.sh
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "▶ 3/6 Parcheando language-server/src/index.ts..."
+if ! grep -q 'import { exec }' "$ROOT/language-server/src/index.ts"; then
+    TMP_FILE=$(mktemp)
+    echo '#!/usr/bin/env node' > "$TMP_FILE"
+    echo 'import { exec } from "child_process";' >> "$TMP_FILE"
+    tail -n +2 "$ROOT/language-server/src/index.ts" >> "$TMP_FILE"
+    mv "$TMP_FILE" "$ROOT/language-server/src/index.ts"
+fi
 
-echo "▶ 1/3 Compilando Language Server (TypeScript)..."
+node -e '
+const fs = require("fs");
+const path = require("path");
+const indexPath = path.join(process.argv[1], "language-server/src/index.ts");
+let content = fs.readFileSync(indexPath, "utf8");
+
+const searchStr = "✅ Grafo generado →";
+if (content.includes(searchStr)) {
+  content = content.replace(
+    /const outPath = generateGraphFile\(vaultRoot\);[\s\S]*?✅ Grafo generado → \$\{outPath\}  \(ábrelo en el navegador\)\`\n\s*\);/,
+    `const outPath = generateGraphFile(vaultRoot);\n        exec(\`xdg-open "\${outPath}" 2>/dev/null || open "\${outPath}" 2>/dev/null || start "" "\${outPath}"\`);\n        connection.window.showInformationMessage(\n          \`✅ Grafo generado y abierto en el navegador\`\n        );`
+  );
+  fs.writeFileSync(indexPath, content);
+}
+' "$ROOT"
+
+echo "▶ 4/6 Limpiando archivos obsoletos (scripts Python)..."
+rm -rf "$ROOT/scripts" "$ROOT/CONFIGURACION_MANUAL.md"
+
+echo "▶ 5/6 Compilando Language Server (TypeScript)..."
 cd "$ROOT/language-server"
-npm install && npm run build
+npm install
+npm run build
 
-echo "▶ 2/3 Compilando extensión Rust → WASM..."
+echo "▶ 6/6 Compilando extensión Rust e Instalando en Zed..."
 cd "$ROOT"
-rustup target add wasm32-wasi 2>/dev/null || true
-cargo build --target wasm32-wasi --release
+WASM_TARGET="wasm32-wasip1"
+rustup target add $WASM_TARGET 2>/dev/null || true
+cargo build --target $WASM_TARGET --release
 
-echo "▶ 3/3 Instalando extensión en Zed..."
 if [[ "$OSTYPE" == "darwin"* ]]; then
   ZED_EXT_DIR="$HOME/Library/Application Support/Zed/extensions/installed/obsidian-vault"
 else
   ZED_EXT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zed/extensions/installed/obsidian-vault"
 fi
 
-mkdir -p "$ZED_EXT_DIR/language-server/dist" "$ZED_EXT_DIR/languages/markdown"
-cp extension.toml "$ZED_EXT_DIR/"
-cp -r languages/markdown/. "$ZED_EXT_DIR/languages/markdown/"
-cp language-server/dist/*.js "$ZED_EXT_DIR/language-server/dist/"
-cp target/wasm32-wasi/release/obsidian_vault.wasm "$ZED_EXT_DIR/extension.wasm"
+# Ahora usamos rutas absolutas seguras ($ROOT/...)
+if [ "$ROOT" != "$ZED_EXT_DIR" ]; then
+  mkdir -p "$ZED_EXT_DIR/language-server/dist" "$ZED_EXT_DIR/languages/markdown"
+  cp "$ROOT/extension.toml" "$ZED_EXT_DIR/"
+  cp -r "$ROOT/languages/markdown/." "$ZED_EXT_DIR/languages/markdown/"
+  cp "$ROOT"/language-server/dist/*.js "$ZED_EXT_DIR/language-server/dist/"
+fi
 
-echo "✅ Instalación limpia completada. ¡Cierra y vuelve a abrir Zed!"
-EOF
-chmod +x build.sh
-echo "✅ build.sh actualizado."
+cp "$ROOT/target/$WASM_TARGET/release/obsidian_vault.wasm" "$ZED_EXT_DIR/extension.wasm"
 
-# 3. Parchear language-server/src/index.ts
-# Añadimos el import de child_process al principio usando un archivo temporal
-TMP_FILE=$(mktemp)
-echo '#!/usr/bin/env node' >"$TMP_FILE"
-echo 'import { exec } from "child_process";' >>"$TMP_FILE"
-tail -n +2 language-server/src/index.ts >>"$TMP_FILE"
-mv "$TMP_FILE" language-server/src/index.ts
-
-# Reemplazamos la lógica de abrir el grafo para no depender de Zed tasks
-# Esto busca la línea exacta y la reemplaza usando node (para evitar problemas con sed en Mac/Linux)
-node -e '
-const fs = require("fs");
-let content = fs.readFileSync("language-server/src/index.ts", "utf8");
-const oldCode = `      try {
-        const outPath = generateGraphFile(vaultRoot);
-        connection.window.showInformationMessage(
-          \`✅ Grafo generado → ${"$"}{outPath}  (ábrelo en el navegador)\`
-        );`;
-const newCode = `      try {
-        const outPath = generateGraphFile(vaultRoot);
-        exec(\`xdg-open "${"$"}{outPath}" 2>/dev/null || open "${"$"}{outPath}" 2>/dev/null || start "" "${"$"}{outPath}"\`);
-        connection.window.showInformationMessage(
-          \`✅ Grafo generado y abierto en el navegador\`
-        );`;
-content = content.replace(oldCode, newCode);
-fs.writeFileSync("language-server/src/index.ts", content);
-'
-echo "✅ language-server/src/index.ts actualizado."
-
-# 4. Eliminar basura
-rm -rf scripts/ CONFIGURACION_MANUAL.md
-echo "🗑️  Archivos de scripts de Python eliminados."
-
-echo ""
-echo "🎉 ¡Todo parcheado con éxito!"
-echo "👉 Ahora simplemente ejecuta: ./build.sh"
+echo "========================================"
+echo " 🎉 ¡EXTENSIÓN INSTALADA CON ÉXITO! 🎉  "
+echo "========================================"
+echo "Abre Zed, ve a una carpeta con un .obsidian y prueba a escribir 'tas'."
